@@ -5,6 +5,15 @@
 #include <string.h>
 #include <time.h>
 
+#define cudaCheck() { _cudaCheck(__FILE__, __LINE__); }
+inline void _cudaCheck(const char *file, int line) {
+    cudaError_t error = cudaGetLastError();
+    if (error != cudaSuccess) {
+        printf("CUDA error at %s:%d: %s\n", file, line, cudaGetErrorString(error));
+        exit(error);
+    }
+}
+
 typedef unsigned char u8;
 
 int buff_w = 10000,
@@ -20,10 +29,11 @@ float zoom = 1.0f,
 u8 pause = 0,
     quit = 0;
 
-size_t buff_size = buff_w * buff_h * 3;
+size_t buff_size = (size_t)buff_w * buff_h * 3;
 
-dim3 blockSize = dim3(32, 32, 1);
-dim3 gridSize = dim3((buff_w + blockSize.x - 1) / blockSize.x, (buff_h + blockSize.y - 1) / blockSize.y, 1);
+dim3 block_size = dim3(32, 32, 1);
+dim3 grid_size = dim3((buff_w + block_size.x - 1) / block_size.x, (buff_h + block_size.y - 1) / block_size.y, 1);
+size_t shared_size = block_size.x * block_size.y * 3;
 
 __global__ void update_cells_kernel(u8* buff, u8* buff_copy, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -39,31 +49,24 @@ __global__ void update_cells_kernel(u8* buff, u8* buff_copy, int width, int heig
         }
     }
 
-
-    u8 col = live_ne == 2 || live_ne == 3 ? 255 : 0;
+    u8 col;
+    if (buff_copy[(y * width + x) * 3] == 255) {
+        col = live_ne == 2 || live_ne == 3 ? 255 : 0;;
+    } else {
+        col = live_ne == 3 ? 255 : 0;
+    }
     buff[(y * width + x) * 3] = col;
     buff[(y * width + x) * 3 + 1] = col;
     buff[(y * width + x) * 3 + 2] = col;
 }
 
-void dev_update_cells(u8* buff, int gen) {
+void dev_update_cells(u8* buff, u8* dev_buff, u8* dev_buff_copy, int gen) {
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
-    u8 *dev_buff, *dev_buff_copy;
-    cudaMalloc(&dev_buff, buff_size);
-    cudaMalloc(&dev_buff_copy, buff_size);
-    cudaMemcpy(dev_buff, buff, buff_size, cudaMemcpyHostToDevice);
-    cudaMemcpy(dev_buff_copy, dev_buff, buff_size, cudaMemcpyDeviceToDevice);
-
-    update_cells_kernel <<<gridSize, blockSize>>> (dev_buff, dev_buff_copy, buff_w, buff_h);
-
-    cudaMemcpy(buff, dev_buff, buff_size, cudaMemcpyDeviceToHost);
-
-    cudaFree(dev_buff);
-    cudaFree(dev_buff_copy);
+    cudaMemcpy(dev_buff_copy, buff, buff_size, cudaMemcpyHostToDevice);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
@@ -72,41 +75,14 @@ void dev_update_cells(u8* buff, int gen) {
     printf("Gen %d, %.0fms\n", gen, elapsed);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
+
+    update_cells_kernel <<<grid_size, block_size, shared_size>>>(dev_buff, dev_buff_copy, buff_w, buff_h);
+    cudaCheck();
+    cudaMemcpy(buff, dev_buff, buff_size, cudaMemcpyDeviceToHost);
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
-}
-
-void host_update_cells(u8* buff, u8* buff_copy, int gen) {
-    struct timespec start, end;
-    clock_gettime(CLOCK_MONOTONIC, &start);
-
-    for (int x = 0; x < buff_w; x++) {
-        for (int y = 0; y < buff_h; y++) {
-            u8 live_ne = 0;
-            for (int i = -1;i <= 1;i++) {
-                for (int j = -1;j <= 1;j++) {
-                    int nx = x + i, ny = y + j;
-                    if (nx < 0 || nx >= buff_w || ny < 0 || ny >= buff_h || (nx == x && ny == y)) continue;
-                    live_ne += buff_copy[(ny * buff_w + nx) * 3] == 255;
-                }
-            }
-
-
-            u8 col = live_ne == 2 || live_ne == 3 ? 255 : 0;
-            buff[(y * buff_w + x) * 3] = col;
-            buff[(y * buff_w + x) * 3 + 1] = col;
-            buff[(y * buff_w + x) * 3 + 2] = col;
-        }
-    }
-
-    memcpy(buff_copy, buff, buff_size);
-
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double elapsed = (end.tv_sec - start.tv_sec) * 1000.0 + 
-                    (end.tv_nsec - start.tv_nsec) / 1000000.0;
-    printf("Gen %d, %.0fms\n", gen, elapsed);
 }
 
 void set_live(u8* buff, int x, int y) {
@@ -159,8 +135,9 @@ void key_callback(GLFWwindow *window, int key, int scancode, int action, int mod
 }
 
 int main(void) {
-    printf("Block Size: (%d, %d, %d)\n", blockSize.x, blockSize.y, blockSize.z);
-    printf("Grid Size: (%d, %d, %d)\n", gridSize.x, gridSize.y, gridSize.z);
+    printf("Buffer size: %zd\n", buff_size);
+    printf("Block Size: (%d, %d, %d)\n", block_size.x, block_size.y, block_size.z);
+    printf("Grid Size: (%d, %d, %d)\n", grid_size.x, grid_size.y, grid_size.z);
 
     if (!glfwInit()) return -1;
 
@@ -175,21 +152,16 @@ int main(void) {
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
     glewExperimental = GL_TRUE;
-    if (glewInit() != GLEW_OK) {
-        fprintf(stderr, "Failed to initialize GLEW\n");
-        return -1;
-    }
+    if (glewInit() != GLEW_OK) return -1;
 
     glfwSetKeyCallback(window, key_callback);
 
-    u8 *buff, *buff_copy;
-
+    u8 *buff;
     cudaHostAlloc((void**)&buff, buff_size, cudaHostAllocDefault); // Pinned memory
-    cudaHostAlloc((void**)&buff_copy, buff_size, cudaHostAllocDefault);
+    cudaCheck();
 
     memset(buff, 0, buff_size);
     initial_state(buff);
-    memcpy(buff_copy, buff, buff_size);
 
     GLuint texture;
     glGenTextures(1, &texture);
@@ -202,13 +174,15 @@ int main(void) {
 
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, buff_w, buff_h, 0, GL_RGB, GL_UNSIGNED_BYTE, buff);
 
+    u8 *dev_buff, *dev_buff_copy;
+    cudaMalloc(&dev_buff, buff_size);
+    cudaMalloc(&dev_buff_copy, buff_size);
+
     int gen = 0; 
     while (!glfwWindowShouldClose(window) && !quit) {  
-        glfwWaitEventsTimeout(1.0f / 60.0f);
+        glfwPollEvents();
 
-        if (pause) {
-            continue;
-        }
+        if (pause) continue;
 
         glClear(GL_COLOR_BUFFER_BIT);
     
@@ -230,17 +204,15 @@ int main(void) {
         glEnd();
 
         glDisable(GL_TEXTURE_2D);
-        
         glfwSwapBuffers(window);
-        
-        //host_update_cells(buff, buff_copy, gen);
-        dev_update_cells(buff, gen);
 
-        gen++;
+        dev_update_cells(buff, dev_buff, dev_buff_copy, gen++);
     }
 
     cudaFreeHost(buff);
-    cudaFreeHost(buff_copy);
+    cudaFree(dev_buff);
+    cudaFree(dev_buff_copy);
+
     glDeleteTextures(1, &texture);
     glfwDestroyWindow(window);
     glfwTerminate();
