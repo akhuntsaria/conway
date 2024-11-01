@@ -16,8 +16,8 @@ inline void _cudaCheck(const char *file, int line) {
 
 typedef unsigned char u8;
 
-int buff_w = 10000,
-    buff_h = 10000,
+int buff_w = 30000,
+    buff_h = 30000,
     window_w = 800,
     window_h = 800;
 
@@ -29,11 +29,11 @@ float zoom = 1.0f,
 u8 pause = 0,
     quit = 0;
 
-size_t buff_size = (size_t)buff_w * buff_h * 3;
+size_t buff_size = buff_w * buff_h;
 
 dim3 block_size = dim3(32, 32, 1);
 dim3 grid_size = dim3((buff_w + block_size.x - 1) / block_size.x, (buff_h + block_size.y - 1) / block_size.y, 1);
-size_t shared_size = block_size.x * block_size.y * 3;
+size_t shared_size = block_size.x * block_size.y;
 
 __global__ void update_cells_kernel(u8* buff, u8* buff_copy, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -45,19 +45,17 @@ __global__ void update_cells_kernel(u8* buff, u8* buff_copy, int width, int heig
         for (int j = -1;j <= 1;j++) {
             int nx = x + i, ny = y + j;
             if (nx < 0 || nx >= width || ny < 0 || ny >= height || (nx == x && ny == y)) continue;
-            live_ne += buff_copy[(ny * width + nx) * 3] == 255;
+            live_ne += buff_copy[ny * width + nx] == 255;
         }
     }
 
     u8 col;
-    if (buff_copy[(y * width + x) * 3] == 255) {
+    if (buff_copy[y * width + x] == 255) {
         col = live_ne == 2 || live_ne == 3 ? 255 : 0;;
     } else {
         col = live_ne == 3 ? 255 : 0;
     }
-    buff[(y * width + x) * 3] = col;
-    buff[(y * width + x) * 3 + 1] = col;
-    buff[(y * width + x) * 3 + 2] = col;
+    buff[y * width + x] = col;
 }
 
 void dev_update_cells(u8* buff, u8* dev_buff, u8* dev_buff_copy, int gen) {
@@ -86,9 +84,7 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 }
 
 void set_live(u8* buff, int x, int y) {
-    buff[(y * buff_w + x) * 3] = 255;
-    buff[(y * buff_w + x) * 3 + 1] = 255;
-    buff[(y * buff_w + x) * 3 + 2] = 255;
+    buff[y * buff_w + x] = 255;
 }
 
 void initial_state(u8* buff) {
@@ -172,7 +168,7 @@ int main(void) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
 
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, buff_w, buff_h, 0, GL_RGB, GL_UNSIGNED_BYTE, buff);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, buff_w, buff_h, 0, GL_RED, GL_UNSIGNED_BYTE, buff);
 
     u8 *dev_buff, *dev_buff_copy;
     cudaMalloc(&dev_buff, buff_size);
@@ -183,12 +179,9 @@ int main(void) {
         glfwPollEvents();
 
         if (pause) continue;
-
-        glClear(GL_COLOR_BUFFER_BIT);
     
         glEnable(GL_TEXTURE_2D);
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, buff_w, buff_h, 0, GL_RGB, GL_UNSIGNED_BYTE, buff);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, buff_w, buff_h, 0, GL_RED, GL_UNSIGNED_BYTE, buff);
         
         float halfZoom = 0.5f / zoom,
             left = off_x + 0.5f - halfZoom,
