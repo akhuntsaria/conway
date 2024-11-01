@@ -1,5 +1,6 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+#include <cstddef>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -18,22 +19,21 @@ typedef unsigned char u8;
 
 int buff_w = 30000,
     buff_h = 30000,
-    window_w = 800,
-    window_h = 800;
+    window_w = 1000,
+    window_h = 1000;
 
 float zoom = 1.0f,
     off_x = .0f,
     off_y = .0f,
-    off_speed = .005f;
+    off_speed = .02f;
 
 u8 pause = 0,
     quit = 0;
 
-size_t buff_size = buff_w * buff_h;
+size_t buff_size = (size_t)buff_w * buff_h;
 
 dim3 block_size = dim3(32, 32, 1);
 dim3 grid_size = dim3((buff_w + block_size.x - 1) / block_size.x, (buff_h + block_size.y - 1) / block_size.y, 1);
-size_t shared_size = block_size.x * block_size.y;
 
 __global__ void update_cells_kernel(u8* buff, u8* buff_copy, int width, int height) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
@@ -58,25 +58,24 @@ __global__ void update_cells_kernel(u8* buff, u8* buff_copy, int width, int heig
     buff[y * width + x] = col;
 }
 
-void dev_update_cells(u8* buff, u8* dev_buff, u8* dev_buff_copy, int gen) {
+void dev_update_cells(u8* buff, u8* dev_buff, u8* dev_buff_copy) {
     cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
     cudaEventRecord(start);
 
     cudaMemcpy(dev_buff_copy, buff, buff_size, cudaMemcpyHostToDevice);
+    update_cells_kernel <<<grid_size, block_size>>>(dev_buff, dev_buff_copy, buff_w, buff_h);
+    cudaCheck();
+    cudaMemcpy(buff, dev_buff, buff_size, cudaMemcpyDeviceToHost);
 
     cudaEventRecord(stop);
     cudaEventSynchronize(stop);
     float elapsed;
     cudaEventElapsedTime(&elapsed, start, stop);
-    printf("Gen %d, %.0fms\n", gen, elapsed);
+    printf("\tDev ops took %.0fms\n", elapsed);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-
-    update_cells_kernel <<<grid_size, block_size, shared_size>>>(dev_buff, dev_buff_copy, buff_w, buff_h);
-    cudaCheck();
-    cudaMemcpy(buff, dev_buff, buff_size, cudaMemcpyDeviceToHost);
 }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
@@ -84,44 +83,63 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 }
 
 void set_live(u8* buff, int x, int y) {
-    buff[y * buff_w + x] = 255;
+    if (x < buff_w && y < buff_h) {
+        buff[y * buff_w + x] = 255;
+    }
 }
 
 void initial_state(u8* buff) {
-    int hw = buff_w / 2,
-        hh = buff_h / 2;
-    set_live(buff, hw + 0, hh + 0);
-    set_live(buff, hw + 2, hh + 0);
-    set_live(buff, hw + 2, hh + 1);
-    set_live(buff, hw + 4, hh + 2);
-    set_live(buff, hw + 4, hh + 3);
-    set_live(buff, hw + 4, hh + 4);
-    set_live(buff, hw + 6, hh + 3);
-    set_live(buff, hw + 6, hh + 4);
-    set_live(buff, hw + 6, hh + 5);
-    set_live(buff, hw + 7, hh + 4);
+    float hh = buff_h / 2.0f,
+        hw = buff_w / 2.0f;
+    // Guns
+    for (int offset_x = 50;offset_x < buff_w;offset_x += 100) {
+        set_live(buff, offset_x + 0, hh + 0);
+        set_live(buff, offset_x + 2, hh + 0);
+        set_live(buff, offset_x + 2, hh + 1);
+        set_live(buff, offset_x + 4, hh + 2);
+        set_live(buff, offset_x + 4, hh + 3);
+        set_live(buff, offset_x + 4, hh + 4);
+        set_live(buff, offset_x + 6, hh + 3);
+        set_live(buff, offset_x + 6, hh + 4);
+        set_live(buff, offset_x + 6, hh + 5);
+        set_live(buff, offset_x + 7, hh + 4);
+    }
+
+    for (int offset_y = 50;offset_y < buff_h;offset_y += 100) {
+        set_live(buff, hw + 0, offset_y + 0);
+        set_live(buff, hw + 2, offset_y + 0);
+        set_live(buff, hw + 2, offset_y + 1);
+        set_live(buff, hw + 4, offset_y + 2);
+        set_live(buff, hw + 4, offset_y + 3);
+        set_live(buff, hw + 4, offset_y + 4);
+        set_live(buff, hw + 6, offset_y + 3);
+        set_live(buff, hw + 6, offset_y + 4);
+        set_live(buff, hw + 6, offset_y + 5);
+        set_live(buff, hw + 7, offset_y + 4);
+    }
+    
 }
 
 void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
         if (key == GLFW_KEY_EQUAL) {
             zoom += .3f;
-            printf("New zoom: %.2f\n", zoom);
+            printf("Zoom %.2f\n", zoom);
         } else if (key == GLFW_KEY_MINUS) {
             zoom -= .3f;
-            printf("New zoom: %.2f\n", zoom);
+            printf("Zoom %.2f\n", zoom);
         } else if (key == GLFW_KEY_LEFT) {
             off_x -= off_speed / zoom;
-            printf("New x offset: %.3f\n", off_x);
+            printf("x offset %.3f\n", off_x);
         } else if (key == GLFW_KEY_RIGHT) {
             off_x += off_speed / zoom;
-            printf("New x offset: %.3f\n", off_x);
+            printf("x offset %.3f\n", off_x);
         } else if (key == GLFW_KEY_UP) {
             off_y += off_speed / zoom;
-            printf("New y offset: %.3f\n", off_y);
+            printf("y offset %.3f\n", off_y);
         } else if (key == GLFW_KEY_DOWN) {
             off_y -= off_speed / zoom;
-            printf("New y offset: %.3f\n", off_y);
+            printf("y offset %.3f\n", off_y);
         } else if (key == GLFW_KEY_Q) {
             quit = 1;
         } else if (key == GLFW_KEY_P) {
@@ -175,7 +193,8 @@ int main(void) {
     cudaMalloc(&dev_buff_copy, buff_size);
 
     int gen = 0; 
-    while (!glfwWindowShouldClose(window) && !quit) {  
+    while (!glfwWindowShouldClose(window) && !quit) {
+        printf("Gen %d\n", ++gen);
         glfwPollEvents();
 
         if (pause) continue;
@@ -199,7 +218,7 @@ int main(void) {
         glDisable(GL_TEXTURE_2D);
         glfwSwapBuffers(window);
 
-        dev_update_cells(buff, dev_buff, dev_buff_copy, gen++);
+        dev_update_cells(buff, dev_buff, dev_buff_copy);
     }
 
     cudaFreeHost(buff);
