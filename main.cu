@@ -1,7 +1,7 @@
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <cstddef>
-#include <stdlib.h>
+#include <cstdlib>
 #include <stdio.h>
 #include <string.h>
 #include <time.h>
@@ -17,16 +17,16 @@ inline void _cudaCheck(const char *file, int line) {
 
 typedef unsigned char u8;
 
-int buff_w = 60000,
-    buff_h = 60000,
+const int GUNS = 1000,
+    GLIDERS = 10000,
+    PAN_SPEED = 10;
+
+int buff_w = 2000,
+    buff_h = 1000,
     window_w = 1500,
     window_h = 800,
-    off_x = 0,
-    off_y = 0,
-    off_speed = 10;
-
-//TODO fix
-float zoom = 1.0f;
+    pan_x = 0,
+    pan_y = 0;
 
 u8 pause = 0,
     quit = 0;
@@ -39,8 +39,8 @@ dim3 grid_size = dim3((buff_w + block_size.x - 1) / block_size.x, (buff_h + bloc
 
 // Copy only what's shown, device to host
 void partial_cpy_dth(u8* host_buff, u8* dev_buff) {
-    size_t start_x = (buff_w - window_w) / 2 + off_x,
-        start_y = (buff_h - window_h) / 2 + off_y;
+    size_t start_x = (buff_w - window_w) / 2 + pan_x,
+        start_y = (buff_h - window_h) / 2 + pan_y;
 
     for (int y = 0; y < window_h; ++y) {
         size_t src_i = (start_y + y) * buff_w + start_x,
@@ -50,8 +50,8 @@ void partial_cpy_dth(u8* host_buff, u8* dev_buff) {
 }
 
 void partial_cpy_htd(u8* dev_buff, u8* host_buff) {
-    size_t start_x = (buff_w - window_w) / 2 + off_x,
-        start_y = (buff_h - window_h) / 2 + off_y;
+    size_t start_x = (buff_w - window_w) / 2 + pan_x,
+        start_y = (buff_h - window_h) / 2 + pan_y;
 
     for (int y = 0; y < window_h; ++y) {
         size_t src_i = y * window_w,
@@ -80,6 +80,7 @@ __global__ void update_cells_kernel(u8* buff, u8* buff_copy, int width, int heig
     } else {
         col = live_ne == 3 ? 255 : 0;
     }
+    // Column-major order
     buff[y * width + x] = col;
 }
 
@@ -107,59 +108,72 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
 
-void set_live(u8* buff, int x, int y) {
-    if (x < window_w && y < window_h) {
-        buff[y * window_w + x] = 255;
-    }
+int rando(int min, int max) {
+    return (rand() % (max - min + 1)) + min;
 }
 
-//TODO entire width of the dev_buff
-void initial_state(u8* host_buff) {
-    float hh = window_h / 2.0f,
-        hw = window_w / 2.0f;
-    // Guns
-    for (int offset_x = 50;offset_x < window_w;offset_x += 100) {
-        set_live(host_buff, offset_x + 0, hh + 0);
-        set_live(host_buff, offset_x + 2, hh + 0);
-        set_live(host_buff, offset_x + 2, hh + 1);
-        set_live(host_buff, offset_x + 4, hh + 2);
-        set_live(host_buff, offset_x + 4, hh + 3);
-        set_live(host_buff, offset_x + 4, hh + 4);
-        set_live(host_buff, offset_x + 6, hh + 3);
-        set_live(host_buff, offset_x + 6, hh + 4);
-        set_live(host_buff, offset_x + 6, hh + 5);
-        set_live(host_buff, offset_x + 7, hh + 4);
+void initial_state(u8* dev_buff) {
+    srand(time(NULL));
+
+    u8 gun[64] = {
+        255,0,  255,0,  0,  0,  0,  0,
+        0,  0,  255,0,  0,  0,  0,  0,
+        0,  0,  0,  0,  255,0,  0,  0,
+        0,  0,  0,  0,  255,0,  255,0,
+        0,  0,  0,  0,  255,0,  255,255,
+        0,  0,  0,  0,  0,  0,  255,0,
+        0,  0,  0,  0,  0,  0,  0,  0,
+        0,  0,  0,  0,  0,  0,  0,  0,
+    };
+
+    int border_h = buff_h / 50,
+        border_w = buff_w / 50;
+
+    for (int figure = 0;figure < GUNS;figure++) {
+        int start_x = rando(border_w, buff_w - border_w),
+            start_y = rando(border_h, buff_h - border_h);
+
+        for (int i = 0; i < 8; i++) {
+            size_t src_i = i * 8,
+                dst_i = (start_y + i) * buff_w + start_x;
+            cudaMemcpy(&dev_buff[dst_i], &gun[src_i], 8, cudaMemcpyHostToDevice);
+        }
     }
 
-    for (int offset_y = 50;offset_y < window_h;offset_y += 100) {
-        set_live(host_buff, hw + 0, offset_y + 0);
-        set_live(host_buff, hw + 2, offset_y + 0);
-        set_live(host_buff, hw + 2, offset_y + 1);
-        set_live(host_buff, hw + 4, offset_y + 2);
-        set_live(host_buff, hw + 4, offset_y + 3);
-        set_live(host_buff, hw + 4, offset_y + 4);
-        set_live(host_buff, hw + 6, offset_y + 3);
-        set_live(host_buff, hw + 6, offset_y + 4);
-        set_live(host_buff, hw + 6, offset_y + 5);
-        set_live(host_buff, hw + 7, offset_y + 4);
+    u8 glider1[9] = {
+        0,  255,255,
+        255,0,  255,
+        0,  0,  255,
+    }, glider2[9] = {
+        0,  0,  255,
+        255,0,  255,
+        0,  255,255,
+    };
+
+    for (int figure = 0;figure < GLIDERS;figure++) {
+        int start_x = rando(border_w, buff_w - border_w),
+            start_y = rando(border_h, buff_h - border_h);
+
+        u8* glider = rand() % 2 ? glider1 : glider2;
+
+        for (int i = 0; i < 3; i++) {
+            size_t src_i = i * 3,
+                dst_i = (start_y + i) * buff_w + start_x;
+            cudaMemcpy(&dev_buff[dst_i], &glider[src_i], 3, cudaMemcpyHostToDevice);
+        }
     }
-    
 }
 
 void key_callback(GLFWwindow *window, int key, int scancode, int action, int mods) {
     if (action == GLFW_PRESS || action == GLFW_REPEAT) {
-        /*if (key == GLFW_KEY_EQUAL) {
-            zoom += .3f;
-        } else if (key == GLFW_KEY_MINUS) {
-            zoom -= .3f;
-        } else*/ if (key == GLFW_KEY_LEFT) {
-            off_x -= off_speed;
+        if (key == GLFW_KEY_LEFT) {
+            pan_x = pan_x - PAN_SPEED;
         } else if (key == GLFW_KEY_RIGHT) {
-            off_x += off_speed;
+            pan_x = pan_x + PAN_SPEED;
         } else if (key == GLFW_KEY_UP) {
-            off_y += off_speed;
+            pan_y = pan_y + PAN_SPEED;
         } else if (key == GLFW_KEY_DOWN) {
-            off_y -= off_speed;
+            pan_y = pan_y - PAN_SPEED;
         } else if (key == GLFW_KEY_Q) {
             quit = 1;
         } else if (key == GLFW_KEY_P) {
@@ -174,34 +188,27 @@ int main(void) {
     printf("Block Size: (%d, %d, %d)\n", block_size.x, block_size.y, block_size.z);
     printf("Grid Size: (%d, %d, %d)\n", grid_size.x, grid_size.y, grid_size.z);
 
-    if (!glfwInit()) return -1;
+    if (!glfwInit()) return 1;
 
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     GLFWwindow* window = glfwCreateWindow(window_w, window_h, "Conway", NULL, NULL);
-    if (!window) {
-        glfwTerminate();
-        return -1;
-    }
+    if (!window) return 1;
 
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
     glewExperimental = GL_TRUE;
-    if (glewInit() != GLEW_OK) return -1;
+    if (glewInit() != GLEW_OK) return 1;
 
     glfwSetKeyCallback(window, key_callback);
 
-    u8 *host_buff, *dev_buff, *dev_buff_copy;
-    
+    u8 *host_buff, *dev_buff, *dev_buff_copy;    
     cudaHostAlloc((void**)&host_buff, window_size, cudaHostAllocDefault);
-    cudaCheck();
-    memset(host_buff, 0, window_size);
-    initial_state(host_buff);
-
     cudaMalloc(&dev_buff, buff_size);
-    cudaMemset(dev_buff, 0, buff_size);
     cudaMalloc(&dev_buff_copy, buff_size);
-    partial_cpy_htd(dev_buff, host_buff);
+
+    cudaMemset(dev_buff, 0, buff_size);
+    initial_state(dev_buff);
 
     GLuint texture;
     glGenTextures(1, &texture);
@@ -219,23 +226,17 @@ int main(void) {
         if (pause) continue;
 
         printf("Gen %d\n", ++gen);
-        printf("  x offset %d\n", off_x); 
-        printf("  y offset %d\n", off_y); 
+        printf("  pan x %d\n", pan_x); 
+        printf("  pan y %d\n", pan_y); 
 
         glEnable(GL_TEXTURE_2D);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RED, window_w, window_h, 0, GL_RED, GL_UNSIGNED_BYTE, host_buff);
-        
-        float halfZoom = 0.5f / zoom,
-            left = 0.5f - halfZoom,
-            right = 0.5f + halfZoom,
-            bottom = 0.5f - halfZoom,
-            top = 0.5f + halfZoom;
 
         glBegin(GL_QUADS);
-            glTexCoord2f(left, bottom); glVertex2f(-1.0f * zoom, -1.0f * zoom);
-            glTexCoord2f(right, bottom); glVertex2f(1.0f * zoom, -1.0f * zoom);
-            glTexCoord2f(right, top); glVertex2f(1.0f * zoom, 1.0f * zoom);
-            glTexCoord2f(left, top); glVertex2f(-1.0f * zoom, 1.0f * zoom);
+            glTexCoord2f(.0f, .0f); glVertex2f(-1.f, -1.f);
+            glTexCoord2f(1.f, .0f); glVertex2f(1.f, -1.f);
+            glTexCoord2f(1.f, 1.f); glVertex2f(1.f, 1.f);
+            glTexCoord2f(.0f, 1.f); glVertex2f(-1.f, 1.f);
         glEnd();
 
         glDisable(GL_TEXTURE_2D);
