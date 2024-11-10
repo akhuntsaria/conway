@@ -17,12 +17,12 @@ inline void _cudaCheck(const char *file, int line) {
     }
 }
 
-const int buff_w = 63000,
-    buff_h = 63000,
+const int buff_w = 15000,
+    buff_h = 15000,
     win_w = 1500,
     win_h = 800,
     gliders = 10000,
-    guns = 1000,
+    guns = 10000,
     pan_speed = 10;
 
 int pan_x = 0,
@@ -87,7 +87,7 @@ void update_cells(uint8_t* host_buff, uint8_t* dev_buff, uint8_t* dev_buff_copy)
     cudaEventSynchronize(stop);
     float elapsed;
     cudaEventElapsedTime(&elapsed, start, stop);
-    printf("  Dev ops took %.0fms\n", elapsed);
+    printf("  Device ops took %.0fms\n", elapsed);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
 }
@@ -103,7 +103,7 @@ int rando(int min, int max) {
 void initial_state(uint8_t* dev_buff) {
     srand(time(NULL));
 
-    uint8_t gun[64] = {
+    uint8_t gun1[64] = {
         255,0,  255,0,  0,  0,  0,  0,
         0,  0,  255,0,  0,  0,  0,  0,
         0,  0,  0,  0,  255,0,  0,  0,
@@ -112,6 +112,15 @@ void initial_state(uint8_t* dev_buff) {
         0,  0,  0,  0,  0,  0,  255,0,
         0,  0,  0,  0,  0,  0,  0,  0,
         0,  0,  0,  0,  0,  0,  0,  0,
+    }, gun2[64] = {
+        0,  0,  0,  0,  0,  0,  0,  0,
+        0,  0,  0,  0,  0,  0,  0,  0,
+        0,  0,  0,  0,  0,  0,  255,0,
+        0,  0,  0,  0,  255,0,  255,255,
+        0,  0,  0,  0,  255,0,  255,0,
+        0,  0,  0,  0,  255,0,  0,  0,
+        0,  0,  255,0,  0,  0,  0,  0,
+        255,0,  255,0,  0,  0,  0,  0
     };
 
     int border_h = buff_h / 50,
@@ -120,6 +129,8 @@ void initial_state(uint8_t* dev_buff) {
     for (int figure = 0;figure < guns;figure++) {
         int start_x = rando(border_w, buff_w - border_w),
             start_y = rando(border_h, buff_h - border_h);
+
+        uint8_t* gun = rand() % 2 ? gun1 : gun2;
 
         for (int i = 0; i < 8; i++) {
             size_t src_i = i * 8,
