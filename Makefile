@@ -1,6 +1,6 @@
-all: clean opengl-conway
+all: clean conway
 
-opengl-conway: main.cu
+conway: main.cu
 	nvcc -arch=sm_89 -O3 -Xcompiler -Wall -Iinclude -Llib -lGLEW -lglfw -lGL -o $@ $^
 
 clean:
